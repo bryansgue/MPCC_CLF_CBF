@@ -1,0 +1,1107 @@
+from acados_template import AcadosOcp, AcadosOcpSolver, AcadosSimSolver
+from acados_template import AcadosModel
+import scipy.linalg
+import numpy as np
+import time
+import matplotlib.pyplot as plt
+from casadi import Function
+from casadi import MX
+from casadi import reshape
+from casadi import vertcat, horzcat, vertsplit
+from casadi import cos
+from casadi import sin
+from casadi import solve
+from casadi import inv
+from casadi import norm_2
+from casadi import cross
+from casadi import if_else
+from casadi import atan2
+from casadi import exp
+from scipy.interpolate import CubicSpline
+from casadi import jacobian
+from casadi import sqrt, dot,  fabs, sign
+import rospy
+from scipy.spatial.transform import Rotation as R
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Twist
+from sensor_msgs.msg import Joy
+import math
+import scipy.io
+from std_msgs.msg import Float64MultiArray
+from geometry_msgs.msg import TwistStamped
+from scipy.integrate import quad
+from scipy.optimize import bisect
+from matplotlib.animation import FuncAnimation
+# CARGA FUNCIONES DEL PROGRAMA
+from graficas import plot_pose, plot_error, plot_time, plot_control, plot_vel_lineal, plot_vel_angular, plot_CBF
+from scipy.spatial.transform import Rotation as Rot
+from std_srvs.srv import Empty
+from scipy.io import savemat
+import os
+
+#from c_generated_code.acados_ocp_solver_pyx import AcadosOcpSolverCython
+
+x_real_1  = 5
+y_real_1  = 0.0
+z_real_1  = 7
+vx_real_1 = 0.0
+vy_real_1 = 0.0
+vz_real_1 = 0.0
+qw_real_1 = 0.7071
+qx_real_1 = 0
+qy_real_1 = 0.0
+qz_real_1 = 0.7071
+wx_real_1 = 0.0
+wy_real_1 = 0.0
+wz_real_1 = 0.0
+
+x_real_2 = 1
+y_real_2 = 0.0
+z_real_2 = 4
+vx_real_2 = 0.0
+vy_real_2 = 0.0
+vz_real_2 = 0.0
+qw_real_2 = 1.0
+qx_real_2 = 0
+qy_real_2 = 0.0
+qz_real_2 = 0.0
+wx_real_2 = 0.0
+wy_real_2 = 0.0
+wz_real_2 = 0.0
+
+hdp_vision = [0,0,0,0,0,0.0]
+axes = [0,0,0,0,0,0]
+
+# Definir el valor global
+value = 18
+
+obs_r = 0.4
+rob_r = 0.4
+margen = 0.1
+
+def odometry_call_back_1(odom_msg):
+    global x_real_1, y_real_1, z_real_1, qx_real_1, qy_real_1, qz_real_1, qw_real_1, vx_real_1, vy_real_1, vz_real_1, wx_real_1, wy_real_1, wz_real_1
+    # Read desired linear velocities from node
+    x_real_1 = odom_msg.pose.pose.position.x 
+    y_real_1 = odom_msg.pose.pose.position.y
+    z_real_1 = odom_msg.pose.pose.position.z
+    vx_real_1 = odom_msg.twist.twist.linear.x
+    vy_real_1 = odom_msg.twist.twist.linear.y
+    vz_real_1 = odom_msg.twist.twist.linear.z
+
+    qx_real_1 = odom_msg.pose.pose.orientation.x
+    qy_real_1 = odom_msg.pose.pose.orientation.y
+    qz_real_1 = odom_msg.pose.pose.orientation.z
+    qw_real_1 = odom_msg.pose.pose.orientation.w
+
+    wx_real_1 = odom_msg.twist.twist.angular.x
+    wy_real_1 = odom_msg.twist.twist.angular.y
+    wz_real_1 = odom_msg.twist.twist.angular.z
+    return None
+
+def odometry_call_back_2(odom1_msg):
+    global x_real_2, y_real_2, z_real_2, qx_real_2, qy_real_2, qz_real_2, qw_real_2, vx_real_2, vy_real_2, vz_real_2, wx_real_2, wy_real_2, wz_real_2
+    # Read desired linear velocities from node
+    x_real_2 = odom1_msg.pose.pose.position.x 
+    y_real_2 = odom1_msg.pose.pose.position.y
+    z_real_2 = odom1_msg.pose.pose.position.z
+    vx_real_2 = odom1_msg.twist.twist.linear.x
+    vy_real_2 = odom1_msg.twist.twist.linear.y
+    vz_real_2 = odom1_msg.twist.twist.linear.z
+
+    qx_real_2 = odom1_msg.pose.pose.orientation.x
+    qy_real_2 = odom1_msg.pose.pose.orientation.y
+    qz_real_2 = odom1_msg.pose.pose.orientation.z
+    qw_real_2 = odom1_msg.pose.pose.orientation.w
+
+    wx_real_2 = odom1_msg.twist.twist.angular.x
+    wy_real_2 = odom1_msg.twist.twist.angular.y
+    wz_real_2 = odom1_msg.twist.twist.angular.z
+    return None
+
+
+def QuatToRot(quat):
+    # Quaternion to Rotational Matrix
+    q = quat # Convierte la lista de cuaterniones en un objeto MX
+    # Calcula la norma 2 del cuaternión
+    q_norm = norm_2(q)
+    # Normaliza el cuaternión dividiendo por su norma
+    q_normalized = q / q_norm
+    q_hat = MX.zeros(3, 3)
+    q_hat[0, 1] = -q_normalized[3]
+    q_hat[0, 2] = q_normalized[2]
+    q_hat[1, 2] = -q_normalized[1]
+    q_hat[1, 0] = q_normalized[3]
+    q_hat[2, 0] = -q_normalized[2]
+    q_hat[2, 1] = q_normalized[1]
+    Rot = MX.eye(3) + 2 * q_hat @ q_hat + 2 * q_normalized[0] * q_hat
+
+    return Rot
+
+def quaternion_multiply(q1, q2):
+    # Descomponer los cuaterniones en componentes
+    w0, x0, y0, z0 = vertsplit(q1)
+    w1, x1, y1, z1 = vertsplit(q2) 
+    # Calcular la parte escalar
+    scalar_part = w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1
+    # Calcular la parte vectorial
+    vector_part = vertcat(w0 * x1 + x0 * w1 + y0 * z1 - z0 * y1, w0 * y1 - x0 * z1 + y0 * w1 + z0 * x1, w0 * z1 + x0 * y1 - y0 * x1 + z0 * w1)
+    # Combinar la parte escalar y vectorial
+    q_result = vertcat(scalar_part, vector_part)  
+    return q_result
+
+def quat_p(quat, omega):
+    # Crear un cuaternión de omega con un componente escalar 0
+    omega_quat = vertcat(MX(0), omega)
+    
+    # Calcular la derivada del cuaternión
+    q_dot = 0.5 * quaternion_multiply(quat, omega_quat)
+    
+    return q_dot
+
+def quaternion_error(q_real, quat_d):
+    norm_q = norm_2(q_real)
+   
+    
+    q_inv = vertcat(q_real[0], -q_real[1], -q_real[2], -q_real[3]) / norm_q
+    
+    q_error = quaternion_multiply(q_inv, quat_d)
+    return q_error
+
+def f_d(x, u, ts, f_sys):
+    k1 = f_sys(x, u)
+    k2 = f_sys(x+(ts/2)*k1, u)
+    k3 = f_sys(x+(ts/2)*k2, u)
+    k4 = f_sys(x+(ts)*k3, u)
+    x = x + (ts/6)*(k1 +2*k2 +2*k3 +k4)
+    aux_x = np.array(x[:,0]).reshape((13,))
+    return aux_x
+
+def f_yaw():
+    value = axes[2]
+    return value
+
+def RK4_yaw(x, ts, f_yaw):
+    k1 = f_yaw()
+    k2 = f_yaw()
+    k3 = f_yaw()
+    k4 = f_yaw()
+    x = x + (ts/6)*(k1 +2*k2 +2*k3 +k4) 
+    aux_x = np.array(x[0]).reshape((1,))
+    return aux_x
+
+def Angulo(ErrAng):
+    
+    if ErrAng >= math.pi:
+        while ErrAng >= math.pi:
+            ErrAng = ErrAng - 2 * math.pi
+        return ErrAng
+
+    # Limitar el ángulo entre [-pi : 0]
+    if ErrAng <= -math.pi:
+        while ErrAng <= -math.pi:
+            ErrAng = ErrAng + 2 * math.pi
+        return ErrAng
+
+    return ErrAng
+
+def visual_callback(msg):
+
+    global hdp_vision 
+
+    vx_visual = msg.twist.linear.x
+    vy_visual = msg.twist.linear.y
+    vz_visual = msg.twist.linear.z
+    wx_visual = msg.twist.angular.x
+    wy_visual = msg.twist.angular.y
+    wz_visual = msg.twist.angular.z
+
+    hdp_vision = [vx_visual, vy_visual, vz_visual, wx_visual, wy_visual, wz_visual]
+    
+def log_cuaternion_casadi(q):
+ 
+    # Descomponer el cuaternio en su parte escalar y vectorial
+    q_w = q[0]
+    q_v = q[1:]
+
+    q = if_else(
+        q_w < 0,
+        -q,  # Si q_w es negativo, sustituir q por -q
+        q    # Si q_w es positivo o cero, dejar q sin cambios
+    )
+
+    # Actualizar q_w y q_v después de cambiar q si es necesario
+    q_w = q[0]
+    q_v = q[1:]
+    
+    # Calcular la norma de la parte vectorial usando CasADi
+    norm_q_v = norm_2(q_v)
+
+    #print(norm_q_v)
+    
+    # Calcular el ángulo theta
+    theta = atan2(norm_q_v, q_w)
+    
+    log_q = 2 * q_v * theta / norm_q_v
+    
+    return log_q
+
+def Euler_p(omega, euler):
+    W = np.array([[1, np.sin(euler[0])*np.tan(euler[1]), np.cos(euler[0])*np.tan(euler[1])],
+                  [0, np.cos(euler[0]), np.sin(euler[0])],
+                  [0, np.sin(euler[0])/np.cos(euler[1]), np.cos(euler[0])/np.cos(euler[1])]])
+
+    euler_p = np.dot(W, omega)
+    return euler_p
+
+def send_velocity_control(u, vel_pub, vel_msg):
+    F = u[0]
+    tx = u[1]
+    ty = u[2]
+    tz = u[3]
+    vel_msg.twist.linear.x = 0.0
+    vel_msg.twist.linear.y = 0.0
+    vel_msg.twist.linear.z = F
+    vel_msg.twist.angular.x = tx
+    vel_msg.twist.angular.y = ty
+    vel_msg.twist.angular.z = tz
+    vel_pub.publish(vel_msg)
+    return None
+
+def euler_to_quaternion(roll, pitch, yaw):
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+    qw = cr * cp * cy + sr * sp * sy
+    qx = sr * cp * cy - cr * sp * sy
+    qy = cr * sp * cy + sr * cp * sy
+    qz = cr * cp * sy - sr * sp * cy
+
+    return [qw, qx, qy, qz]
+
+def send_full_state_to_sim(state_vector, publisher, frame_id="odo2"):
+    
+    odometry_msg = Odometry()
+    odometry_msg.header.frame_id = frame_id
+    odometry_msg.header.stamp = rospy.Time.now()
+    odometry_msg.pose.pose.position.x = state_vector[0]
+    odometry_msg.pose.pose.position.y = state_vector[1]
+    odometry_msg.pose.pose.position.z = state_vector[2]
+    odometry_msg.twist.twist.linear.x = state_vector[3]
+    odometry_msg.twist.twist.linear.y = state_vector[4]
+    odometry_msg.twist.twist.linear.z = state_vector[5]
+    odometry_msg.pose.pose.orientation.w = state_vector[6]
+    odometry_msg.pose.pose.orientation.x = state_vector[7]
+    odometry_msg.pose.pose.orientation.y = state_vector[8]
+    odometry_msg.pose.pose.orientation.z = state_vector[9]
+    odometry_msg.twist.twist.angular.x = state_vector[10]
+    odometry_msg.twist.twist.angular.y = state_vector[11]
+    odometry_msg.twist.twist.angular.z = state_vector[12]
+
+    publisher.publish(odometry_msg)
+
+def rc_callback(data):
+    global axes
+    axes_aux = data.axes
+    psi = -np.pi / 2
+    R = np.array([[np.cos(psi), -np.sin(psi), 0, 0, 0, 0],
+                [np.sin(psi), np.cos(psi), 0, 0, 0, 0],
+                [0, 0, -1, 0, 0, 0],
+                [0, 0, 0, 1, 0, 0],
+                [0, 0, 0, 0, 1, 0],
+                [0, 0, 0, 0, 0, 1]])
+    axes = R@axes_aux
+
+def get_odometry_complete_1():
+    global x_real_1, y_real_1, z_real_1, qx_real_1, qy_real_1, qz_real_1, qw_real_1, vx_real_1, vy_real_1, vz_real_1, wx_real_1, wy_real_1, wz_real_1
+    x_state = [x_real_1,y_real_1,z_real_1,vx_real_1,vy_real_1,vz_real_1, qw_real_1, qx_real_1, qy_real_1, qz_real_1, wx_real_1, wy_real_1, wz_real_1 ]
+    return x_state  
+
+def get_odometry_complete_2():
+    global x_real_2, y_real_2, z_real_2, qx_real_2, qy_real_2, qz_real_2, qw_real_2, vx_real_2, vy_real_2, vz_real_2, wx_real_2, wy_real_2, wz_real_2
+    x_state = [x_real_2,y_real_2,z_real_2,vx_real_2,vy_real_2,vz_real_2, qw_real_2, qx_real_2, qy_real_2, qz_real_2, wx_real_2, wy_real_2, wz_real_2 ]
+    return x_state  
+    
+def print_state_vector(state_vector):
+    headers = ["px", "py", "pz", "vx", "vy", "vz", "qx", "qx", "qy", "qz", "w_x", "w_y", "w_z"]
+    if len(state_vector) != len(headers):
+        raise ValueError(f"El vector de estado tiene {len(state_vector)} elementos, pero se esperaban {len(headers)} encabezados.")
+    max_header_length = max(len(header) for header in headers)
+    for header, value in zip(headers, state_vector):
+        formatted_header = header.ljust(max_header_length)
+        print(f"{formatted_header}: {value:.2f}")
+    print()
+
+def publish_matrix(matrix_data, topic_name='/nombre_del_topico'):
+    matrix_msg = Float64MultiArray()
+    matrix_data_flat = matrix_data.flatten().tolist()
+    matrix_msg.data = matrix_data_flat
+    matrix_publisher = rospy.Publisher(topic_name, Float64MultiArray, queue_size=10)
+    matrix_publisher.publish(matrix_msg)
+
+def trayectoria(t):
+
+    def xd(t):
+        return 7 * np.sin(value * 0.04 * t + np.pi) + 3
+
+    def yd(t):
+        return 7 * np.sin(value * 0.08 * t + np.pi)
+
+    def zd(t):
+        return 1.5 * np.sin(value * 0.08 * t + np.pi) + 6
+
+    def xd_p(t):
+        return 7 * value * 0.04 * np.cos(value * 0.04 * t + np.pi)
+
+    def yd_p(t):
+        return 7 * value * 0.08 * np.cos(value * 0.08 * t + np.pi)
+
+    def zd_p(t):
+        return 1.5 * value * 0.08 * np.cos(value * 0.08 * t + np.pi)
+
+    return xd, yd, zd, xd_p, yd_p, zd_p
+
+def calculate_positions_and_arc_length(xd, yd, zd, xd_p, yd_p, zd_p, t_range, t_max):
+    
+    def r(t):
+        return np.array([xd(t), yd(t), zd(t)])
+
+    def r_prime(t):
+        return np.array([xd_p(t), yd_p(t), zd_p(t)])
+
+    def integrand(t):
+        return np.linalg.norm(r_prime(t))
+
+    def arc_length(tk, t0=0):
+        length, _ = quad(integrand, t0, tk, limit=100)  # Aumentar el límite de subdivisiones
+        return length
+
+    # Generar las posiciones y longitudes de arco
+    positions = []
+    arc_lengths = []
+    
+    for tk in t_range:
+        theta = arc_length(tk)
+        arc_lengths.append(theta)
+        point = r(tk)
+        positions.append(point)
+
+    arc_lengths = np.array(arc_lengths)
+    positions = np.array(positions).T  # Convertir a array 2D (3, N)
+
+    # Verificar si arc_lengths es estrictamente creciente
+    if not np.all(np.diff(arc_lengths) > 0):
+        raise ValueError("arc_lengths is not strictly increasing. Check the trajectory functions.")
+
+    # Crear splines cúbicos para la longitud de arco con respecto al tiempo
+    spline_t = CubicSpline(arc_lengths, t_range)
+    spline_x = CubicSpline(t_range, positions[0, :])
+    spline_y = CubicSpline(t_range, positions[1, :])
+    spline_z = CubicSpline(t_range, positions[2, :])
+
+    # Función que retorna la posición dado un valor de longitud de arco
+    def position_by_arc_length(s):
+        t_estimated = spline_t(s)  # Usar spline para obtener la estimación precisa de t
+        return np.array([spline_x(t_estimated), spline_y(t_estimated), spline_z(t_estimated)])
+
+    return arc_lengths, positions, position_by_arc_length
+
+def trayectoria_hiper(t):
+
+    """ Crea y retorna las funciones para la trayectoria hiperelíptica y sus derivadas. """
+    
+    a = 6
+    b = 6
+    c = 5
+    n = 4
+    t_final = t[-1]  # Suponiendo que t está normalizado al rango de tiempo total
+
+    def xd(t):
+        theta = t * np.pi / (2 * t_final)  # Normaliza t para que theta esté en el rango [0, pi/2]
+        return a * np.cos(theta)**(2/n)
+
+    def yd(t):
+        theta = t * np.pi / (2 * t_final)
+        return b * np.sin(theta)**(2/n)
+
+    def zd(t):
+        return np.full_like(t, c)  # Mantén z constante en c
+
+    def xd_p(t):
+        theta = t * np.pi / (2 * t_final)
+        cos_theta = np.cos(theta)
+        sin_theta = np.sin(theta)
+        # Evita divisiones por cero en cos_theta o sin_theta
+        with np.errstate(divide='ignore', invalid='ignore'):
+            result = -a * (2/n) * np.where(cos_theta != 0, cos_theta**(2/n - 1), 0) * sin_theta * (np.pi / (2 * t_final))
+        return result
+
+    def yd_p(t):
+        theta = t * np.pi / (2 * t_final)
+        cos_theta = np.cos(theta)
+        sin_theta = np.sin(theta)
+        # Evita divisiones por cero en sin_theta
+        with np.errstate(divide='ignore', invalid='ignore'):
+            result = b * (2/n) * np.where(sin_theta != 0, sin_theta**(2/n - 1), 0) * cos_theta * (np.pi / (2 * t_final))
+        return result
+
+    def zd_p(t):
+        return np.zeros_like(t)  # Derivada en z es cero, ya que Z es constante
+
+    return xd, yd, zd, xd_p, yd_p, zd_p
+
+def calculate_reference_positions_and_curvature(arc_lengths,position_by_arc_length, t, t_s, v_max, alpha):
+    # Calcular los valores de s para la referencia
+    s_values = np.linspace(arc_lengths[0], arc_lengths[-1], len(arc_lengths))
+
+    # Calcular las posiciones y sus derivadas con respecto a s
+    positions = np.array([position_by_arc_length(s) for s in s_values])
+    dr_ds = np.gradient(positions, s_values, axis=0)
+    d2r_ds2 = np.gradient(dr_ds, s_values, axis=0)
+
+    # Calcular la curvatura en cada punto
+    cross_product = np.cross(dr_ds[:-1], d2r_ds2[:-1])
+    numerator = np.linalg.norm(cross_product, axis=1)
+    denominator = np.linalg.norm(dr_ds[:-1], axis=1)**3
+    curvature = numerator / denominator
+
+    # Definir la velocidad de referencia en función de la curvatura
+    v_ref = v_max / (1 + alpha * curvature)
+
+    # Inicializar s_progress y calcular el progreso en longitud de arco
+    s_progress = np.zeros(len(t))
+    s_progress[0] = s_values[0]
+    for i in range(1, len(t)):
+        s_progress[i] = s_progress[i-1] + v_ref[min(i-1, len(v_ref)-1)] * t_s
+
+    # Calcular las posiciones de referencia basadas en el progreso de s
+    pos_ref = np.array([position_by_arc_length(s) for s in s_progress])
+    pos_ref = pos_ref.T
+
+    # Calcular la derivada de la posición respecto a la longitud de arco
+    dp_ds = np.gradient(pos_ref, s_progress, axis=1)
+
+    return pos_ref, s_progress, v_ref, dp_ds
+
+def calculate_errors_norm(sd, sd_p, model_x):
+    """
+    Calcula las normas del error de contorno, error de arrastre, error total y la velocidad de avance.
+    
+    Parámetros:
+    sd       -- (np.array) posición deseada (vector de 3 elementos)
+    sd_p     -- (np.array) velocidad tangente deseada (vector de 3 elementos, ya normalizado)
+    model_x  -- (np.array) estado actual del UAV (6 elementos: 0-2 posición, 3-5 velocidad)
+
+    Devuelve:
+    norm_error_contorno, norm_error_arrastre, error_total, vel_progres
+    """
+
+    # ERROR DE POSICIÓN
+    error_pose = sd - model_x[0:3]
+
+    # ERROR DE ARRASTRE (norma del vector)
+    tangent_normalized = sd_p  # ya está normalizado por longitud de arco
+    el = np.dot(tangent_normalized, error_pose) * tangent_normalized
+    norm_error_arrastre = np.linalg.norm(el)
+
+    # ERROR DE CONTORNO (norma del vector)
+    I = np.eye(3)
+    P_ec = I - np.outer(tangent_normalized, tangent_normalized)  # proyección ortogonal
+    error_contorno = np.dot(P_ec, error_pose)
+    norm_error_contorno = np.linalg.norm(error_contorno)
+
+    # ERROR TOTAL (suma de las normas)
+    error_total = error_contorno + el
+
+    # VELOCIDAD DE AVANCE (escalar)
+    vel_progres = np.dot(tangent_normalized, model_x[3:6])
+
+    return error_contorno, el, error_total, vel_progres
+
+def f_system_model():
+    # Name of the system
+    model_name = 'Drone_ode_complete_2'
+    # Dynamic Values of the system
+    m = 0.85
+    e = MX([0, 0, 1])
+    g = 9.81 
+    # States
+    p1 = MX.sym('p1')
+    p2 = MX.sym('p2')
+    p3 = MX.sym('p3')
+    v1 = MX.sym('v1')
+    v2 = MX.sym('v2')
+    v3 = MX.sym('v3')
+    q0 = MX.sym('q0')
+    q1 = MX.sym('q1')
+    q2 = MX.sym('q2')
+    q3 = MX.sym('q3')
+    w1 = MX.sym('w1')
+    w2 = MX.sym('w2')
+    w3 = MX.sym('w3')
+
+    x = vertcat(p1, p2, p3, v1, v2, v3, q0, q1, q2, q3, w1, w2, w3)
+
+    # Action variables
+    Tt = MX.sym('Tt')
+    tau1 = MX.sym('tau1')
+    tau2 = MX.sym('tau2')
+    tau3 = MX.sym('tau3')
+
+    u = vertcat(Tt, tau1, tau2, tau3)
+
+    # Variables to explicit function
+    p1_p = MX.sym('p1_p')
+    p2_p = MX.sym('p2_p')
+    p3_p = MX.sym('p3_p')
+    v1_p = MX.sym('v1_p')
+    v2_p = MX.sym('v2_p')
+    v3_p = MX.sym('v3_p')
+    q0_p = MX.sym('q0')
+    q1_p = MX.sym('q1')
+    q2_p = MX.sym('q2')
+    q3_p = MX.sym('q3')
+    w1_p = MX.sym('w1_p')
+    w2_p = MX.sym('w2_p')
+    w3_p = MX.sym('w3_p')
+
+    x_p = vertcat(p1_p, p2_p, p3_p, v1_p, v2_p, v3_p, q0_p, q1_p, q2_p, q3_p, w1_p, w2_p, w3_p)
+
+    # Ref system as a external value
+    p1_d = MX.sym('p1_d')
+    p2_d = MX.sym('p2_d')
+    p3_d = MX.sym('p3_d')
+    v1_d = MX.sym('v1_d')
+    v2_d = MX.sym('v2_d')
+    v3_d = MX.sym('v3_d')
+    q0_d = MX.sym('q0_d')
+    q1_d = MX.sym('q1_d')
+    q2_d = MX.sym('q2_d')
+    q3_d = MX.sym('q3_d')
+    w1_d = MX.sym('w1_d')
+    w2_d = MX.sym('w2_d')
+    w3_d = MX.sym('w3_d')
+    T_d = MX.sym('T_d')
+    tau1_d = MX.sym('tau1_d')
+    tau2_d = MX.sym('tau2_d')
+    tau3_d = MX.sym('tau3_d')
+
+    nx_obs = MX.sym('nx_obs')
+    ny_obs = MX.sym('ny_obs')
+    nz_obs = MX.sym('nz_obs')
+    
+    obstaculo_din_1 = vertcat(nx_obs, ny_obs, nz_obs  )
+    
+    p = vertcat(p1_d, p2_d, p3_d, v1_d, v2_d, v3_d, q0_d, q1_d, q2_d, q3_d, w1_d, w2_d, w3_d, T_d, tau1_d, tau2_d, tau3_d, obstaculo_din_1)
+
+    # Crea una lista de MX con los componentes del cuaternión
+    quat = vertcat(q0, q1, q2, q3)
+    w = vertcat(w1, w2, w3)
+    Rot = QuatToRot(quat)
+    # Definición de la matriz de inercia I
+    Jxx = 0.00305587
+    Jyy = 0.00159695
+    Jzz = 0.00159687
+    I = vertcat(horzcat(Jxx, 0, 0),horzcat(0, Jyy, 0),horzcat(0, 0, Jzz))
+    
+    u1 = vertcat(0, 0, Tt)
+    u2 = vertcat(tau1, tau2, tau3)
+    
+    p_p = vertcat(v1, v2, v3)
+    v_p = -e*g + ((Rot @ u1)  / m) 
+    q_p = quat_p(quat, w)  
+    w_p = inv(I) @ (u2 - cross(w, I @ w))
+
+    f_expl = vertcat(p_p, v_p, q_p, w_p)
+
+    # Define f_x and g_x
+    f_x = Function('f_x', [x], [f_expl])
+    g_x = Function('g_x', [x, u], [jacobian(f_expl, u)])
+    f_system = Function('system',[x, u], [f_expl])
+
+     # Acados Model
+    f_impl = x_p - f_expl
+    model = AcadosModel()
+    model.f_impl_expr = f_impl
+    model.f_expl_expr = f_expl
+    model.x = x
+    model.xdot = x_p
+    model.u = u
+    model.name = model_name
+    model.p = p
+
+    return model, f_system, f_x, g_x
+
+def create_ocp_solver_description(x0, N_horizon, t_horizon) -> AcadosOcp:
+    # create ocp object to formulate the OCP
+    ocp = AcadosOcp()
+
+    model, f_system, f_x, g_x = f_system_model()
+    ocp.model = model
+    ocp.p = model.p
+    nx = model.x.size()[0]
+    nu = model.u.size()[0]
+    #ny = nx + nu + 3
+    ny = model.p.size()[0]
+
+    # set dimensions
+    ocp.dims.N = N_horizon
+
+    ocp.parameter_values = np.zeros(ny)
+
+    ocp.cost.cost_type = "EXTERNAL"
+    ocp.cost.cost_type_e = "EXTERNAL"
+
+    error_pose = ocp.p[0:3] - model.x[0:3]
+    quat_error = quaternion_error(model.x[6:10], ocp.p[6:10])
+    log_q = log_cuaternion_casadi(quat_error)
+
+    # set cost
+    Q_q = 10 * np.diag([1, 1, 1])  # [x,th,dx,dth]
+    # Define matrices de ganancia para los errores
+    Q_el = 1 * np.eye(3)  
+    Q_ec = 1 * np.eye(3) 
+    U_mat = 1.0 * np.diag([ 0.002, 200, 200, 200])
+    Q_vels = 0.05
+
+
+    # Definir variables simbólicas  
+    ocp.cost.cost_type = "EXTERNAL"
+    ocp.cost.cost_type_e = "EXTERNAL"
+    
+    #ERROR DE POSICION
+    sd = ocp.p[0:3]
+    error_pose = sd - model.x[0:3]
+
+    #ERROR DE ARRASTRE
+    sd_p = ocp.p[3:6]
+    
+    tangent_normalized = sd_p # sd_p / norm_2(sd_p) ---> por propiedad la nomra de la recta tangente en longotud de arco ya es unitario
+    el = dot(tangent_normalized, error_pose) * tangent_normalized
+
+    # ERROR DE CONTORNO
+    I = MX.eye(3) 
+    P_ec = I - tangent_normalized.T @ tangent_normalized
+    ec = P_ec @ error_pose 
+
+    #Velocidad de avance
+    vel_progres = dot(tangent_normalized, model.x[3:6])
+
+    # Define el costo externo considerando los errores como vectores
+    control_cost = 1*model.u.T @ U_mat @ model.u 
+    actitud_cost = log_q.T @ Q_q @ log_q 
+    error_contorno = 1*ec.T @ Q_ec @ ec
+    error_lag = 1*el.T @ Q_el @ el
+    vel_progres_cost = Q_vels*vel_progres  
+
+    ocp.model.cost_expr_ext_cost = error_contorno + error_lag + actitud_cost + control_cost - vel_progres_cost
+    ocp.model.cost_expr_ext_cost_e = error_contorno + error_lag + actitud_cost - vel_progres_cost
+
+    # set constraints
+    Tmax = 3*9.81
+    taux_max = 0.2
+    tauy_max = 0.2
+    tauz_max = 0.2
+
+    Tmin = 0 
+    taux_min = -taux_max
+    tauy_min = - tauy_max
+    tauz_min = -tauz_max
+
+    ocp.constraints.lbu = np.array([Tmin,taux_min,tauy_min,tauz_min])
+    ocp.constraints.ubu = np.array([Tmax,taux_max,tauy_max,tauz_max])
+    ocp.constraints.idxbu = np.array([0, 1, 2, 3])
+
+    ocp.constraints.x0 = x0
+    
+    ##RESTRICCIONES NO LINEALES
+    # Definir la matriz de ponderación para los errores de arrastre y contorno
+    Q_l = MX.eye(3)  # Matriz de ponderación para el error de arrastre
+    Q_c = MX.eye(3)  # Matriz de ponderación para el error de contorno
+
+    # Función candidata de Lyapunov basada en el error de arrastre
+    V= (1/2) * el.T @ Q_l @ el
+
+    
+    # Velocidad proyectada en la tangente (vector)
+    vel_progres_vector = vel_progres * tangent_normalized  # Esto es un vector
+
+    # Derivada temporal de V_l basada en las velocidades de progreso
+    V_p = -el.T @ Q_l @ vel_progres_vector 
+
+
+    obs_x = ocp.p[17]     # Posicion donde actualiza la posicion del obstaculo
+    obs_y= ocp.p[18]
+    obs_z= ocp.p[19]
+    #obs_x = 2.9     
+    #obs_y = 0.17
+    #obs_z = 6 
+    
+    
+    # PRIMERA BARRERA (en el espacio 3D)
+    h = sqrt((model.x[0] - obs_x)**2 + (model.x[1] - obs_y)**2 + (model.x[2] - obs_z)**2) - (rob_r + obs_r + margen)
+
+    f_x_val = f_x(model.x)
+    g_x_val = g_x(model.x,model.u)
+
+    # Derivada de Lie de primer orden
+    Lf_h = jacobian(h, model.x) @ f_x_val 
+    Lg_h = jacobian(h, model.x) @ g_x_val
+
+    # Derivada de Lie de segundo orden
+    Lf2_h = jacobian(Lf_h, model.x) @ f_x_val
+    Lg_L_f_h = jacobian(Lf_h, model.x) @ g_x_val 
+
+    # Barreras temporales
+    h_p = Lf_h + Lg_h @ model.u
+    h_pp = Lf2_h + Lg_L_f_h @ model.u
+   
+    # set constraints
+    ocp.constraints.constr_type = 'BGH'
+
+    nb_1 = h
+    nb_2 = vertcat(h, Lf_h) 
+
+    K_alpha = MX([20, 15]).T # 20 15
+
+   # Define las restricciones 
+    #constraints = vertcat(h_p + 5*nb_1)#, h_pp +  K_alpha @ nb_2 )
+    constraints = vertcat(h_pp +  K_alpha @ nb_2,   V_p + 0.1 *V)
+
+    # Asigna las restricciones al modelo del OCP
+    N_constraints = constraints.size1()
+
+    ocp.model.con_h_expr = constraints
+    ocp.constraints.lh = np.array([0, -1e9 ])  # Límite inferior 
+    ocp.constraints.uh = np.array([1e9, 0])  # Límite superior
+
+    # Configuración de las restricciones suaves
+    cost_weights = np.array([0.1,0])
+    ocp.cost.zu = 1*cost_weights 
+    ocp.cost.zl = 1*cost_weights 
+    ocp.cost.Zl = 1 * cost_weights 
+    ocp.cost.Zu = 1 * cost_weights 
+
+    # Índices para las restricciones suaves (necesario si se usan)
+    ocp.constraints.idxsh = np.arange(N_constraints)  # Índices de las restricciones suaves
+
+    # set options
+    ocp.solver_options.qp_solver = "FULL_CONDENSING_HPIPM"  # FULL_CONDENSING_QPOASES
+    ocp.solver_options.hessian_approx = "GAUSS_NEWTON"  # 'GAUSS_NEWTON', 'EXACT'
+    ocp.solver_options.integrator_type = "ERK"
+    ocp.solver_options.nlp_solver_type = "SQP_RTI"  # SQP_RTI, SQP
+    #ocp.solver_options.qp_solver_iter_max = 50  # Limitar iteraciones del solucionador QP
+    #ocp.solver_options.tol = 1e-3  # Relajar ligeramente la tolerancia para obtener soluciones más robustas
+
+
+    # set prediction horizon
+    ocp.solver_options.tf = t_horizon
+
+    return ocp
+
+
+def main(vel_pub, vel_msg, publisher_2):
+    # Initial Values System
+    t_final = 30
+    # Sample time
+    frec= 30
+    t_s = 1/frec
+    # Prediction Time
+    N_horizont = frec
+    t_prediction = N_horizont/frec
+
+    # Nodes inside MPC
+    N = np.arange(0, t_prediction + t_s, t_s)
+    N_prediction = N.shape[0]
+
+    # Time simulation
+    t = np.arange(0, t_final + t_s, t_s)
+
+    # Sample time vector
+    delta_t = np.zeros((1, t.shape[0] - N_prediction), dtype=np.double)
+    CLF= np.zeros((1, t.shape[0] - N_prediction), dtype=np.double)
+    h_CBF = np.zeros((1, t.shape[0] - N_prediction), dtype=np.double)
+    
+    
+    e_contorno_2 = np.zeros((3, t.shape[0] - N_prediction), dtype=np.double)
+    e_arrastre_2 = np.zeros((3, t.shape[0] - N_prediction), dtype=np.double)
+    e_total_2 = np.zeros((3, t.shape[0] - N_prediction), dtype=np.double)
+    vel_progres_2 = np.zeros((1, t.shape[0] - N_prediction), dtype=np.double)
+    vel_progress_ref_2 =  np.zeros((1, t.shape[0] - N_prediction), dtype=np.double)
+
+    # Vector Initial conditions
+    x = np.zeros((13, t.shape[0]+1-N_prediction), dtype = np.double)
+
+    #x[:, 0] = get_odometry_complete()
+    
+
+    # Obtener las funciones de trayectoria y sus derivadas
+    xd, yd, zd, xd_p, yd_p, zd_p = trayectoria(t)
+    #xd, yd, zd, xd_p, yd_p, zd_p = trayectoria_hiper(t)
+
+    # Calcular posiciones parametrizadas en longitud de arco
+    t_finer = np.linspace(0, t_final*3, len(t)*3)  # Duplicar el tiempo y generar más puntos
+
+    arc_lengths, pos_ref, position_by_arc_length= calculate_positions_and_arc_length(xd, yd, zd, xd_p, yd_p, zd_p, t_finer , t_max=t_final*3)
+    dp_ds = np.gradient(pos_ref, arc_lengths, axis=1)
+    
+    vmax = 7
+    alpha= 0.2
+    pos_ref, s_progress, v_ref, dp_ds = calculate_reference_positions_and_curvature(arc_lengths, position_by_arc_length, t, t_s, vmax  , alpha)
+
+
+    # Evaluar las derivadas en cada instante
+    xd_p_vals = xd_p(t)
+    yd_p_vals = yd_p(t)
+
+    # Calcular psid y su derivada
+    psid = np.arctan2(yd_p_vals, xd_p_vals)
+
+    #quaternion = euler_to_quaternion(0, 0, psid) 
+    quatd= np.zeros((4, t.shape[0]), dtype = np.double)
+
+    # Calcular los cuaterniones utilizando la función euler_to_quaternion para cada psid
+    for i in range(t.shape[0]):
+        quaternion = euler_to_quaternion(0, 0, psid[i])  # Calcula el cuaternión para el ángulo de cabeceo en el instante i
+        quatd[:, i] = quaternion  # Almacena el cuaternión en la columna i de 'quatd'
+
+    # Reference Signal of the system
+    xref = np.zeros((17, t.shape[0]), dtype = np.double)
+    xref[0, :] = pos_ref[0, :]  # px_d
+    xref[1, :] = pos_ref[1, :]  # py_d
+    xref[2, :] = pos_ref[2, :]  # pz_d
+    xref[3,:] = dp_ds [0, :]          # vx_d
+    xref[4,:] = dp_ds [1, :]          # vy_d
+    xref[5,:] = dp_ds [2, :]       # vz_d 
+    xref[6,:] = quatd[0, :]         # qw_d
+    xref[7,:] = quatd[1, :]         # qx_d
+    xref[8,:] = quatd[2, :]        # qy_d
+    xref[9,:] = quatd[3, :]         # qz_d
+    xref[10,:] = 0         # wx_d
+    xref[11,:] = 0         # wy_d
+    xref[12,:] = 0         # wz_d
+    
+    # Initial Control values
+    u_control = np.zeros((4, t.shape[0]-N_prediction), dtype = np.double)
+
+        # Create Optimal problem
+    model, f, f_x, f_g = f_system_model()
+
+    ocp = create_ocp_solver_description(x[:,0], N_prediction, t_prediction)
+    #acados_ocp_solver = AcadosOcpSolver(ocp, json_file="acados_ocp_" + ocp.model.name + ".json", build= True, generate= True)
+
+    solver_json = 'acados_ocp_2' + model.name + '.json'
+    
+    AcadosOcpSolver.generate(ocp, json_file=solver_json)
+    AcadosOcpSolver.build(ocp.code_export_directory, with_cython=True)
+    acados_ocp_solver = AcadosOcpSolver.create_cython_solver(solver_json)
+    #acados_ocp_solver = AcadosOcpSolverCython(ocp.model.name, ocp.solver_options.nlp_solver_type, ocp.dims.N)
+
+    nx = ocp.model.x.size()[0]
+    nu = ocp.model.u.size()[0]
+
+    simX = np.ndarray((nx, N_prediction+1))
+    simU = np.ndarray((nu, N_prediction))
+
+    # Simulation System
+    ros_rate = 30  # Tasa de ROS en Hz
+    rate = rospy.Rate(ros_rate)  # Crear un objeto de la clase rospy.Rate
+    
+     # Read Real data
+    for i in range(0,10):
+        x[:, 0] = get_odometry_complete_2()
+        print("Loading...")
+        rate.sleep()
+
+    # Initial States Acados
+    for stage in range(N_prediction + 1):
+        acados_ocp_solver.set(stage, "x", x[:, 0])
+    for stage in range(N_prediction):
+        acados_ocp_solver.set(stage, "u", np.zeros((nu,)))
+
+    print("Ready!!!")
+       
+    v_theta = np.zeros(len(t))
+
+    constraint_expr = ocp.model.con_h_expr
+    constraint_func = Function('constraint_func', [ocp.model.x, ocp.model.u, ocp.model.p], [constraint_expr])
+
+    send_start_signal()
+
+    for k in range(0, t.shape[0]-N_prediction):
+        tic = time.time()
+
+        
+
+        # SET OBSTACLE
+        matrice_1 = get_odometry_complete_1()
+        obst_din_1 = np.array(matrice_1[:3])     
+               
+        #AVALUACION DE LA FUNCION DE BARRERA
+        h_CBF[:, k] = np.linalg.norm(x[:3, k] - obst_din_1) - (rob_r + obs_r + margen)
+        print(h_CBF[:, k])
+        
+
+        # Control Law Section
+        acados_ocp_solver.set(0, "lbx", x[:,k])
+        acados_ocp_solver.set(0, "ubx", x[:,k])
+
+        # Actualizar los parámetros en el solver
+        parameters = np.hstack([xref[:,k], obst_din_1])     
+        constraint_value = constraint_func(x[:, k],u_control[:, k],  parameters)
+        CLF[:,k] = (constraint_value[1])
+        
+
+         # SET REFERENCES
+        for j in range(N_prediction):
+            yref = xref[:,k+j]
+
+            parameters = np.hstack([yref, obst_din_1 ])
+            acados_ocp_solver.set(j, "p", parameters)
+
+        yref_N = xref[:,k+N_prediction]
+        parameters_N = np.hstack([yref_N, obst_din_1 ])
+        acados_ocp_solver.set(N_prediction, "p", parameters_N)
+
+        # get solution
+        for i in range(N_prediction):
+            simX[:,i] = acados_ocp_solver.get(i, "x")
+            simU[:,i] = acados_ocp_solver.get(i, "u")
+        simX[:,N_prediction] = acados_ocp_solver.get(N_prediction, "x")
+
+        publish_matrix(simX[0:3, 1:N_prediction], '/Prediction_2')
+        
+
+        # Get Computational Time
+        status = acados_ocp_solver.solve()
+        toc_solver = time.time()- tic
+
+        # Get Control Signal
+        #u_control[:, k] = simU[:,1]
+        u_control[:, k] = acados_ocp_solver.get(0, "u")
+                 
+        # System Evolution
+        opcion = "Sim"  # Valor que quieres evaluar
+
+        if opcion == "Real":
+            x[:, k+1] = get_odometry_complete_2()
+        elif opcion == "Sim":
+            x[:, k+1] = f_d(x[:, k], u_control[:, k], t_s, f)
+            
+            send_full_state_to_sim(x[:, k+1], publisher_2 )
+        else:
+            print("Opción no válida")
+
+        rate.sleep() 
+        toc = time.time() - tic 
+
+        
+        
+       # Obtener el tiempo actual de ROS
+        e_contorno_2[:,k], e_arrastre_2[:,k], e_total_2[:,k], vel_progres_2[:,k] = calculate_errors_norm(xref[0:3,k], xref[3:6,k], x[0:6,k])
+       
+        vel_progress_ref_2[:, k] =  v_ref[k]
+
+
+
+
+        
+     
+    
+    send_velocity_control([0, 0, 0, 0], vel_pub, vel_msg)
+
+    fig1 = plot_pose(x, xref, t)
+    fig1.savefig("1_pose_2.png")
+    
+    
+    fig3 = plot_vel_lineal(x[3:6,:], t)
+    fig3.savefig("3_vel_lineal_2.png")
+    
+    fig4 = plot_vel_angular(x[10:13,:], t)
+    fig4.savefig("4_vel_angular_2.png")
+
+    fig5 = plot_CBF(h_CBF, t)
+    fig5.savefig("5_CBF_2.png")
+
+    fig6 = plot_CBF(CLF, t)
+    fig6.savefig("6_CLF_2.png")
+
+
+    fig2 = plot_control(u_control, t)
+    fig2.savefig("2_control_actions.png")
+    
+    print(f'Mean iteration time with MLP Model: {1000*np.mean(delta_t):.1f}ms -- {1/np.mean(delta_t):.0f}Hz)')
+
+
+            #For MODEL TESTS
+    # Ruta que deseas verificar
+    pwd = "/home/bryansgue/Doctoral_Research/Matlab/Results_MPCC_CLF_CBF"
+
+    # Verificar si la ruta no existe
+    if not os.path.exists(pwd) or not os.path.isdir(pwd):
+        print(f"La ruta {pwd} no existe. Estableciendo la ruta local como pwd.")
+        pwd = os.getcwd()  # Establece la ruta local como pwd
+
+    #SELECCION DEL EXPERIMENTO
+   
+    experiment_number = 1
+    name_file = "Results_2_MPCC_CLF_CBF_" + str(experiment_number) + ".mat"
+    
+    save = True
+    if save==True:
+        savemat(os.path.join(pwd, name_file), {
+            'states_2': x,
+            'CBF_2': h_CBF,
+            'CLF_2': CLF,
+            'time_2': t,
+            'e_total_2': e_total_2,
+            'e_contorno_2': e_contorno_2,
+            'e_arrastre_2': e_arrastre_2,
+            'vel_progres_2': vel_progres_2,
+            'vel_progres_ref_2':vel_progress_ref_2})
+
+    return None
+
+# Función para enviar la señal de inicio al servidor
+def send_start_signal():
+    rospy.wait_for_service('start_acados_loop')
+    try:
+        start_acados = rospy.ServiceProxy('start_acados_loop', Empty)
+        rospy.loginfo("Enviando señal de inicio al servidor...")
+        start_acados()  # Enviar la señal de inicio
+        rospy.loginfo("Señal de inicio enviada con éxito.")
+    except rospy.ServiceException as e:
+        rospy.logerr(f"Error al llamar al servicio: {e}")
+
+if __name__ == '__main__':
+    try:
+        # Node Initialization
+        rospy.init_node("Acados_controller",disable_signals=True, anonymous=True)
+        # Enviar la señal de inicio al servidor
+        
+
+        
+        Matrice_2 = rospy.Subscriber("/M2/dji_sdk/odometry", Odometry, odometry_call_back_2)
+        Matrice_1 = rospy.Subscriber("/dji_sdk/odometry", Odometry, odometry_call_back_1)  
+        RC_sub = rospy.Subscriber("/dji_sdk/rc", Joy, rc_callback, queue_size=10)
+
+        publisher_2 = rospy.Publisher('/M2/dji_sdk/odometry', Odometry, queue_size=10)
+
+        #PARA EL MATRICE REAL
+        
+        velocity_topic = "/m100/velocityControl"
+        velocity_message = TwistStamped()
+        velocity_publisher = rospy.Publisher(velocity_topic, TwistStamped, queue_size=10)
+
+        main(velocity_publisher, velocity_message,  publisher_2)
+
+    except(rospy.ROSInterruptException, KeyboardInterrupt):
+        print("\nError System")
+        send_velocity_control([0, 0, 0, 0], velocity_publisher, velocity_message)
+        pass
+    else:
+        print("Complete Execution")
+        pass
